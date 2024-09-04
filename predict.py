@@ -3,12 +3,38 @@ import pandas as pd
 import numpy as np
 import nfl_data_py as nfl
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, AdaBoostClassifier, ExtraTreesClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.naive_bayes import GaussianNB
+from catboost import CatBoostClassifier
+from sklearn.neural_network import MLPClassifier
+from optparse import OptionParser
+
+# from xgboost import XGBClassifier
+
 
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
+SEED = 42
+
+models = {
+    'Logistic Regression': LogisticRegression(),
+    'K-Nearest Neighbors': KNeighborsClassifier(),
+    'Support Vector Machine': SVC(),
+    'Decision Tree': DecisionTreeClassifier(random_state=SEED),
+    'Random Forest': RandomForestClassifier(n_estimators=100, random_state=SEED),
+    'Gradient Boosting': GradientBoostingClassifier(),
+    'AdaBoost': AdaBoostClassifier(),
+    'Naive Bayes': GaussianNB(),
+    # 'XGBoost': XGBClassifier(),
+    # 'LightGBM': lgb.LGBMClassifier(),
+    'CatBoost': CatBoostClassifier(learning_rate=0.1, iterations=100, depth=6, verbose=0),
+    'Extra Trees': ExtraTreesClassifier(),
+    'Neural Network': MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=SEED)
+}
 
 # Define the cache directory
 CACHE_DIR = "nfl_data_cache"
@@ -46,9 +72,9 @@ def load_from_pickle_cache(data_info):
     if not os.path.exists(file_path):
         return None
     with open(file_path, 'rb') as f:
-        data_info = pickle.load(f)
+        data_info_old = pickle.load(f)
     # verify that the data info is the same
-    if data_info != data_info:
+    if data_info_old != data_info:
         return None
 
     # load data
@@ -156,7 +182,7 @@ def filter_stats(final_summary, stats):
         team_data = final_summary[final_summary['team'] == team]
         # run a filter on the data that weights the latest games more
         # and returns the stats that we want
-        team_data[stats] = team_data[stats].rolling(window=10).mean()
+        team_data.loc[:, stats] = team_data[stats].rolling(window=10).mean()
         # take a windowed average of the last 10 games
         # put team_data back into final_summary
         final_summary[final_summary['team'] == team] = team_data
@@ -198,40 +224,78 @@ def form_vectors(final_summary, stats):
     results = vectors[['game_id', 'result_x']]
     return vectors, new_stats, results
 
-if __name__ == "__main__":
-    # Example usage
-    start_year = 2009
-    end_year = 2021
+def eval_models(X_train, X_test, y_train, y_test):
+    accuracy_scores = []
+    for model_name, model in models.items():
+        # model = HistGradientBoostingClassifier()
+        model.fit(X_train, y_train)
+
+        # Predict on the test set
+        y_pred = model.predict(X_test)
+
+        # Evaluate the model
+        accuracy = accuracy_score(y_test, y_pred)
+        conf_matrix = confusion_matrix(y_test, y_pred)
+        class_report = classification_report(y_test, y_pred)
+
+        print("Accuracy:", accuracy)
+        print("Confusion Matrix:\n", conf_matrix)
+        print("Classification Report:\n", class_report)
+        accuracy_scores.append((model_name, accuracy))
+
+    accuracy_scores.sort(key=lambda x: x[1], reverse=True)
+    print("Accuracy Scores:")
+    for model_name, accuracy in accuracy_scores:
+        print(f"{model_name}: {accuracy}")
+
+    print()
+    # print the dimensions of train data
+    print('Number of training games:', X_train.shape[0])
+    print('Number of features:', X_train.shape[1])
+    print()
+    print('Number of test games:', X_test.shape[0])
+
+def main():
+    parser = OptionParser()
+    parser.add_option("-s", "--start_year", dest="start_year", type="int", default=2009,
+                        help="The first year of data to fetch (default: 2009)")
+    parser.add_option("-e", "--end_year", dest="end_year", type="int", default=2023,
+                        help="The last year of data to fetch (default: 2023)")
+    parser.add_option("-w", "--end_week", dest="end_week", type="int", default=17,
+                        help="The last week of the season to fetch (default: 17)")
+    parser.add_option("-t", "--season_type", dest="season_type", default=None,
+                        help="Restrict the data to a specific season type (e.g., 'REG', 'POST')")
+    parser.add_option("-m", "--model", dest="model", default="Neural Network",
+                        help="The model to use for prediction (default: RandomForest) one of: %s" % ", ".join(models.keys()))
+    parser.add_option("--eval_model", dest="eval_model", default=False, action="store_true",
+                    help="Run the data through a bunch of models and spit out stats")
+    (options, args) = parser.parse_args()
 
     # Fetch the data with caching
-    data, stats_cols, game_cols = fetch_data_with_cache(start_year, end_year)
+    data, stats_cols, game_cols = fetch_data_with_cache(options.start_year, options.end_year)
+    # only get rows where season type is REG
     data_save = data.copy()
 
     find_correlation(data, stats_cols)
 
     data_filtered = filter_stats(data, stats_cols)
+    if options.season_type:
+        data_filtered = data_filtered[data_filtered['season_type'] == 'REG']
 
     vectors, new_stats, output = form_vectors(data_filtered, stats_cols)
     X = vectors[new_stats]
     y = output['result_x']
 
-    # Split the data into training and testing sets
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, shuffle=False)
+    if options.eval_model:
+        # Split the data into training and testing sets
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, shuffle=False)
+        eval_models(X_train, X_test, y_train, y_test)
 
-    model = HistGradientBoostingClassifier(random_state=42)
-    model.fit(X_train, y_train)
 
-    # Predict on the test set
-    y_pred = model.predict(X_test)
+if __name__ == "__main__":
+    main()
 
-    # Evaluate the model
-    accuracy = accuracy_score(y_test, y_pred)
-    conf_matrix = confusion_matrix(y_test, y_pred)
-    class_report = classification_report(y_test, y_pred)
 
-    print("Accuracy:", accuracy)
-    print("Confusion Matrix:\n", conf_matrix)
-    print("Classification Report:\n", class_report)
 
     # print_correlation(data, 'drive_score_percentage')
     # print_correlation(data, 'drive_score_percentage_def')

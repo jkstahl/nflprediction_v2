@@ -114,10 +114,10 @@ def fetch_data_with_cache(start_year, end_year, end_week, options, current_year)
         print(f"Fetching data for {season}...")
         # Fetch play-by-play data
         pbp_data = get_cached_data(season, "pbp")
-        if pbp_data is None:
+        if pbp_data is None or (season == current_year):
             print(f"Cache miss.. Fetching play-by-play data for {season}...")
             try:
-                pbp_data = nfl.import_pbp_data([season])
+                pbp_data = nfl.import_pbp_data([season], include_participation=False)
             except:
                 continue
             save_to_cache(pbp_data, season, "pbp")
@@ -200,6 +200,9 @@ def fetch_data_with_cache(start_year, end_year, end_week, options, current_year)
     schedule_data.loc[schedule_data.index % 2 == 0, 'home_away'] = 'home'
     schedule_data.loc[schedule_data.index % 2 == 1, 'team'] = schedule_data.loc[schedule_data.index % 2 == 1, 'away_team']
     schedule_data.loc[schedule_data.index % 2 == 1, 'home_away'] = 'away'
+
+    # only add rows where year and week are not in the final_summary
+    schedule_data = schedule_data[~schedule_data['game_id'].isin(final_summary['game_id'])]
     final_summary = pd.concat([final_summary, schedule_data])[cols].reset_index(drop=True)
 
     # This part shifts the game rows so that the result of the game is aligned with the stats of the previous game
@@ -420,6 +423,9 @@ def main():
 
     if options.predict_year and options.predict_week: # if we are predicting for a given year and week, don't get any data grater than that.
         options.end_year = int(options.predict_year)
+    
+    if options.predict_week:
+        options.end_week = options.predict_week
 
     # Fetch the data with caching
     data, stats_cols, game_cols = fetch_data_with_cache(options.start_year, options.end_year, options.end_week, options, current_year)
@@ -499,6 +505,9 @@ def main():
         print (week_val['correct'])
         year_val = eval_df.groupby('year').mean()
         print(year_val['correct'])
+        import matplotlib.pyplot as plt
+        plt.plot(week_val['correct'])
+        plt.show()
 
 
 
